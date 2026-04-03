@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Wall Measure - Annotation Tool</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Fabric.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <!-- Lucide Icons (optional, but requested Undo/Redo icons) -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* Custom styles for canvas and UI */
+        body {
+            background-color: #f3f4f6;
+            overscroll-behavior: none;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        .canvas-container {
+            margin: 0 auto;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            background-color: #fff;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        /* Ensure buttons are at least 44px for touch targets */
+        button, label {
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .drawing-mode {
+            cursor: crosshair !important;
+        }
+        /* Modal styling */
+        #labelModal {
+            transition: opacity 0.2s ease-in-out;
+        }
+        .hidden {
+            display: none;
+        }
+        /* Toast notification */
+        #toast {
+            transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
+            transform: translateY(100%);
+            opacity: 0;
+        }
+        #toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen overflow-hidden">
+
+    <!-- Top Bar -->
+    <header class="bg-white border-b border-gray-200 px-4 py-2 flex items-center justify-between z-10">
+        <h1 class="text-lg font-bold text-gray-800">Wall Measure</h1>
+        <div class="flex space-x-2">
+            <button id="undoBtn" class="p-2 text-gray-600 hover:bg-gray-100 rounded disabled:opacity-30" title="Undo" disabled>
+                <i data-lucide="undo-2"></i>
+            </button>
+            <button id="redoBtn" class="p-2 text-gray-600 hover:bg-gray-100 rounded disabled:opacity-30" title="Redo" disabled>
+                <i data-lucide="redo-2"></i>
+            </button>
+            <button id="deleteBtn" class="p-2 text-red-500 hover:bg-red-50 rounded disabled:opacity-30" title="Delete Selected" disabled>
+                <i data-lucide="trash-2"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content (Canvas Area) -->
+    <main class="flex-1 overflow-auto p-4 flex items-center justify-center relative bg-gray-100">
+        <div id="canvasWrapper" class="canvas-container relative">
+            <canvas id="canvas"></canvas>
+            <!-- Empty State Overlay -->
+            <div id="emptyState" class="absolute inset-0 flex flex-col items-center justify-center text-gray-400 p-8 text-center pointer-events-none">
+                <i data-lucide="image" class="w-16 h-16 mb-4 opacity-20"></i>
+                <p class="text-lg font-medium">No image loaded</p>
+                <p class="text-sm">Capture or upload a photo to start measuring</p>
+            </div>
+        </div>
+        
+        <!-- Status Hint -->
+        <div id="statusHint" class="absolute top-6 left-1/2 -translate-x-1/2 bg-black/60 text-white text-xs px-3 py-1 rounded-full pointer-events-none opacity-0 transition-opacity duration-300">
+            Double-click a line to edit label
+        </div>
+    </main>
+
+    <!-- Bottom Toolbar -->
+    <footer class="bg-white border-t border-gray-200 p-4 pb-6 sm:pb-4 z-10">
+        <div class="max-w-md mx-auto grid grid-cols-4 gap-2">
+            <!-- Capture Photo -->
+            <label class="flex flex-col items-center justify-center cursor-pointer hover:bg-gray-50 rounded-lg transition-colors">
+                <input type="file" id="captureInput" accept="image/*" capture="environment" class="hidden">
+                <i data-lucide="camera" class="w-6 h-6 text-blue-600"></i>
+                <span class="text-[10px] mt-1 font-medium text-gray-600">Capture</span>
+            </label>
+            
+            <!-- Upload Image -->
+            <label class="flex flex-col items-center justify-center cursor-pointer hover:bg-gray-50 rounded-lg transition-colors">
+                <input type="file" id="uploadInput" accept="image/*" class="hidden">
+                <i data-lucide="image-plus" class="w-6 h-6 text-blue-600"></i>
+                <span class="text-[10px] mt-1 font-medium text-gray-600">Upload</span>
+            </label>
+
+            <!-- Draw Line -->
+            <button id="drawBtn" class="flex flex-col items-center justify-center hover:bg-gray-50 rounded-lg transition-colors disabled:opacity-30">
+                <i data-lucide="pen-tool" class="w-6 h-6 text-blue-600"></i>
+                <span class="text-[10px] mt-1 font-medium text-gray-600">Draw Line</span>
+            </button>
+
+            <!-- Download -->
+            <button id="downloadBtn" class="flex flex-col items-center justify-center hover:bg-gray-50 rounded-lg transition-colors disabled:opacity-30">
+                <i data-lucide="download" class="w-6 h-6 text-green-600"></i>
+                <span class="text-[10px] mt-1 font-medium text-gray-600">Download</span>
+            </button>
+        </div>
+    </footer>
+
+    <!-- Label Edit Modal -->
+    <div id="labelModal" class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 hidden opacity-0">
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden">
+            <div class="p-6">
+                <h3 class="text-lg font-bold mb-4">Edit Measurement</h3>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Measurement (e.g. 120 cm)</label>
+                        <input type="text" id="measurementInput" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" placeholder="Enter value...">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Label/Note (optional)</label>
+                        <input type="text" id="noteInput" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" placeholder="e.g. Window, Door...">
+                    </div>
+                </div>
+            </div>
+            <div class="bg-gray-50 px-6 py-4 flex justify-end space-x-3">
+                <button id="cancelModal" class="px-4 py-2 text-gray-600 font-medium hover:bg-gray-200 rounded-lg transition-colors">Cancel</button>
+                <button id="saveModal" class="px-4 py-2 bg-blue-600 text-white font-medium hover:bg-blue-700 rounded-lg transition-colors">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-24 left-1/2 -translate-x-1/2 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg z-50 text-sm font-medium">
+        Load an image first
+    </div>
+
+    <script>
+        // --- Initialization ---
+        lucide.createIcons();
+        
+        const canvas = new fabric.Canvas('canvas', {
+            width: 0,
+            height: 0,
+            backgroundColor: '#fff',
+            preserveObjectStacking: true
+        });
+
+        // State variables
+        let isDrawingMode = false;
+        let isImageLoaded = false;
+        let activeLine = null;
+        let startPoint = null;
+        let undoStack = [];
+        let redoStack = [];
+        let isSavingState = false;
+        let currentModalObject = null;
+
+        // UI Elements
+        const undoBtn = document.getElementById('undoBtn');
+        const redoBtn = document.getElementById('redoBtn');
+        const deleteBtn = document.getElementById('deleteBtn');
+        const drawBtn = document.getElementById('drawBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const captureInput = document.getElementById('captureInput');
+        const uploadInput = document.getElementById('uploadInput');
+        const emptyState = document.getElementById('emptyState');
+        const statusHint = document.getElementById('statusHint');
+        const toast = document.getElementById('toast');
+        const labelModal = document.getElementById('labelModal');
+        const measurementInput = document.getElementById('measurementInput');
+        const noteInput = document.getElementById('noteInput');
+        const saveModal = document.getElementById('saveModal');
+        const cancelModal = document.getElementById('cancelModal');
+
+        // --- Core Functions ---
+
+        function showToast(message) {
+            toast.textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 2000);
+        }
+
+        function updateUIState() {
+            drawBtn.disabled = !isImageLoaded;
+            downloadBtn.disabled = !isImageLoaded;
+            undoBtn.disabled = undoStack.length === 0;
+            redoBtn.disabled = redoStack.length === 0;
+            deleteBtn.disabled = !canvas.getActiveObject();
+            
+            if (isDrawingMode) {
+                drawBtn.classList.add('bg-blue-100', 'ring-2', 'ring-blue-500');
+                canvas.defaultCursor = 'crosshair';
+            } else {
+                drawBtn.classList.remove('bg-blue-100', 'ring-2', 'ring-blue-500');
+                canvas.defaultCursor = 'default';
+            }
+
+            if (isImageLoaded) {
+                emptyState.style.display = 'none';
+                statusHint.classList.remove('opacity-0');
+            } else {
+                emptyState.style.display = 'flex';
+                statusHint.classList.add('opacity-0');
+            }
+        }
+
+        // --- Undo/Redo System ---
+        function saveState() {
+            if (isSavingState) return;
+            const json = JSON.stringify(canvas.toObject(['selectable', 'evented', 'id']));
+            undoStack.push(json);
+            if (undoStack.length > 50) undoStack.shift();
+            redoStack = [];
+            updateUIState();
+        }
+
+        function undo() {
+            if (undoStack.length === 0) return;
+            isSavingState = true;
+            const currentState = JSON.stringify(canvas.toObject(['selectable', 'evented', 'id']));
+            redoStack.push(currentState);
+            const lastState = undoStack.pop();
+            canvas.loadFromJSON(lastState, () => {
+                canvas.renderAll();
+                isSavingState = false;
+                updateUIState();
+            });
+        }
+
+        function redo() {
+            if (redoStack.length === 0) return;
+            isSavingState = true;
+            const currentState = JSON.stringify(canvas.toObject(['selectable', 'evented', 'id']));
+            undoStack.push(currentState);
+            const nextState = redoStack.pop();
+            canvas.loadFromJSON(nextState, () => {
+                canvas.renderAll();
+                isSavingState = false;
+                updateUIState();
+            });
+        }
+
+        // --- Image Handling ---
+        function handleImage(file) {
+            if (!file) return;
+            
+            if (isImageLoaded && canvas.getObjects().length > 0) {
+                if (!confirm("Loading a new image will clear existing annotations. Continue?")) {
+                    return;
+                }
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const imgObj = new Image();
+                imgObj.src = e.target.result;
+                imgObj.onload = function() {
+                    const maxWidth = 1200;
+                    const maxHeight = 800;
+                    let width = imgObj.width;
+                    let height = imgObj.height;
+
+                    // Scale down if too large
+                    if (width > maxWidth || height > maxHeight) {
+                        const ratio = Math.min(maxWidth / width, maxHeight / height);
+                        width *= ratio;
+                        height *= ratio;
+                    }
+
+                    // Clear canvas and set dimensions
+                    canvas.clear();
+                    canvas.setDimensions({ width, height });
+                    
+                    fabric.Image.fromURL(e.target.result, function(img) {
+                        img.set({
+                            scaleX: width / imgObj.width,
+                            scaleY: height / imgObj.height,
+                            selectable: false,
+                            evented: false,
+                            originX: 'left',
+                            originY: 'top'
+                        });
+                        canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas));
+                        isImageLoaded = true;
+                        undoStack = [];
+                        redoStack = [];
+                        saveState();
+                        updateUIState();
+                    });
+                };
+            };
+            reader.readAsDataURL(file);
+        }
+
+        captureInput.addEventListener('change', (e) => handleImage(e.target.files[0]));
+        uploadInput.addEventListener('change', (e) => handleImage(e.target.files[0]));
+
+        // --- Drawing Logic ---
+        drawBtn.addEventListener('click', () => {
+            if (!isImageLoaded) {
+                showToast("Load an image first");
+                return;
+            }
+            isDrawingMode = !isDrawingMode;
+            canvas.discardActiveObject();
+            updateUIState();
+        });
+
+        canvas.on('mouse:down', function(opt) {
+            if (!isDrawingMode) return;
+            
+            const pointer = canvas.getPointer(opt.e);
+            startPoint = { x: pointer.x, y: pointer.y };
+            
+            const points = [startPoint.x, startPoint.y, startPoint.x, startPoint.y];
+            activeLine = new fabric.Line(points, {
+                strokeWidth: 4,
+                fill: 'red',
+                stroke: 'red',
+                originX: 'center',
+                originY: 'center',
+                selectable: false,
+                evented: false
+            });
+            canvas.add(activeLine);
+        });
+
+        canvas.on('mouse:move', function(opt) {
+            if (!isDrawingMode || !activeLine) return;
+            
+            const pointer = canvas.getPointer(opt.e);
+            let endX = pointer.x;
+            let endY = pointer.y;
+
+            // Snapping logic
+            const dx = Math.abs(endX - startPoint.x);
+            const dy = Math.abs(endY - startPoint.y);
+            const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+
+            if (angle < 5) { // Horizontal snap
+                endY = startPoint.y;
+            } else if (angle > 85) { // Vertical snap
+                endX = startPoint.x;
+            }
+
+            activeLine.set({ x2: endX, y2: endY });
+            canvas.renderAll();
+        });
+
+        canvas.on('mouse:up', function() {
+            if (!isDrawingMode || !activeLine) return;
+
+            const x1 = activeLine.x1;
+            const y1 = activeLine.y1;
+            const x2 = activeLine.x2;
+            const y2 = activeLine.y2;
+
+            // If line is too short, discard
+            if (Math.hypot(x2 - x1, y2 - y1) < 10) {
+                canvas.remove(activeLine);
+                activeLine = null;
+                return;
+            }
+
+            // Create Textbox
+            const text = new fabric.Textbox('Enter measurement', {
+                fontSize: 14,
+                fontFamily: 'sans-serif',
+                textAlign: 'center',
+                width: 120,
+                backgroundColor: 'white',
+                padding: 5,
+                originX: 'center',
+                originY: 'center',
+                splitByGrapheme: false,
+                wordWrap: true
+            });
+
+            // Position text at midpoint
+            const midX = (x1 + x2) / 2;
+            const midY = (y1 + y2) / 2;
+            
+            // Create Group
+            const group = new fabric.Group([activeLine, text], {
+                left: midX,
+                top: midY,
+                originX: 'center',
+                originY: 'center',
+                selectable: true,
+                hasControls: true,
+                hasRotatingPoint: true
+            });
+
+            // Adjust internal positioning
+            activeLine.set({ left: 0, top: 0, selectable: true, evented: true });
+            text.set({ left: 0, top: 0 });
+
+            canvas.remove(activeLine);
+            canvas.add(group);
+            canvas.setActiveObject(group);
+            
+            activeLine = null;
+            isDrawingMode = false;
+            saveState();
+            updateUIState();
+        });
+
+        // --- Object Behavior ---
+        canvas.on('object:modified', function(e) {
+            saveState();
+        });
+
+        canvas.on('selection:created', updateUIState);
+        canvas.on('selection:updated', updateUIState);
+        canvas.on('selection:cleared', updateUIState);
+
+        // --- Label Editing ---
+        canvas.on('mouse:dblclick', function(opt) {
+            const target = opt.target;
+            if (target && target.type === 'group') {
+                openModal(target);
+            }
+        });
+
+        // Long press for mobile
+        let touchTimer;
+        canvas.on('mouse:down', function(opt) {
+            if (opt.target && opt.target.type === 'group') {
+                touchTimer = setTimeout(() => {
+                    openModal(opt.target);
+                }, 600);
+            }
+        });
+        canvas.on('mouse:up', () => clearTimeout(touchTimer));
+        canvas.on('mouse:move', () => clearTimeout(touchTimer));
+
+        function openModal(obj) {
+            currentModalObject = obj;
+            const textObj = obj.item(1);
+            const currentText = textObj.text;
+            
+            // Try to split into measurement and note
+            if (currentText === 'Enter measurement') {
+                measurementInput.value = '';
+                noteInput.value = '';
+            } else {
+                const parts = currentText.split('\n');
+                measurementInput.value = parts[0] || '';
+                noteInput.value = parts[1] || '';
+            }
+
+            labelModal.classList.remove('hidden');
+            setTimeout(() => labelModal.classList.add('opacity-100'), 10);
+            measurementInput.focus();
+        }
+
+        function closeModal() {
+            labelModal.classList.remove('opacity-100');
+            setTimeout(() => {
+                labelModal.classList.add('hidden');
+                currentModalObject = null;
+            }, 200);
+        }
+
+        saveModal.addEventListener('click', () => {
+            if (!measurementInput.value.trim()) {
+                alert("Measurement is required");
+                return;
+            }
+
+            const text = measurementInput.value.trim() + (noteInput.value.trim() ? '\n' + noteInput.value.trim() : '');
+            const textObj = currentModalObject.item(1);
+            textObj.set('text', text);
+            
+            canvas.renderAll();
+            saveState();
+            closeModal();
+        });
+
+        cancelModal.addEventListener('click', closeModal);
+
+        // --- Toolbar Actions ---
+        undoBtn.addEventListener('click', undo);
+        redoBtn.addEventListener('click', redo);
+        
+        deleteBtn.addEventListener('click', () => {
+            const activeObject = canvas.getActiveObject();
+            if (activeObject) {
+                canvas.remove(activeObject);
+                canvas.discardActiveObject();
+                saveState();
+                updateUIState();
+            }
+        });
+
+        // Delete key listener
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                // Don't delete if typing in modal
+                if (document.activeElement.tagName === 'INPUT') return;
+                
+                const activeObject = canvas.getActiveObject();
+                if (activeObject) {
+                    canvas.remove(activeObject);
+                    canvas.discardActiveObject();
+                    saveState();
+                    updateUIState();
+                }
+            }
+        });
+
+        downloadBtn.addEventListener('click', () => {
+            if (!isImageLoaded) return;
+            
+            // Deselect everything before export
+            canvas.discardActiveObject();
+            canvas.renderAll();
+
+            const dataURL = canvas.toDataURL({
+                format: 'png',
+                quality: 1.0
+            });
+
+            const link = document.createElement('a');
+            link.download = `wall_measure_${Date.now()}.png`;
+            link.href = dataURL;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        });
+
+        // Initial UI update
+        updateUIState();
+
+    </script>
+</body>
+</html>

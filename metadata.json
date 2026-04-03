@@ -1,0 +1,7 @@
+{
+  "name": "Wall Measure",
+  "description": "A tool to annotate wall measurements on photos with lines and labels.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
